@@ -1,0 +1,214 @@
+# Подробен промпт — Yasem MAG IPTV за CoreELEC (компилация + възстановяване)
+
+Дата на този бекъп: 2026-10-08
+Работеща референция: CoreELEC 19.3 Matrix, 32-bit ARM HF (armv7/neon/hard-float), Amlogic S905L
+SSH референция: YOUR_BOX_IP (root; парола САМО през env YASEM_SSH_PASS / WSLENV)
+Портал по подразбиране: http://portal.example.com
+Публичен пакет: http://www.example.com/mag/yasem.tar
+Локален upload файл: /path/to/yasem-project/yasem.tar
+Преносим пакет: /path/to/yasem-project/yasem-portable\
+Бекъп: /path/to/yasem-project/backup/yasem-YYYY-MM-DD\ (+ датиран yasem-YYYY-MM-DD-HHMM/)
+Изходен код: /path/to/yasem-project/yasem\src\
+Проект: /path/to/yasem-project/yasem/yasem.pro
+Build: /path/to/yasem-project/build/build-yasem.sh
+Deploy: /path/to/yasem-project/build\deploy-binary.sh
+Опаковане: /path/to/yasem-project/build\pack-portable.sh
+WSL build root: /home/builder/yasem-build/
+
+---
+
+## Какво е това (за нов AI чат)
+
+Продължи работата по Yasem — преносим Qt 5.15 + QtWebKit MAG STB емулатор за CoreELEC (Amlogic).
+Отговори на български. Не commit-вай освен по изрична молба. Парола SSH само през YASEM_SSH_PASS.
+
+### Режим на бокса
+- **Yasem-only boot** — yasem.service + yasem.timer; kodi.service masked
+- Между splash и портал: черен екран; чака DHCP/DNS
+- Soft standby (Power): спира Yasem, гаси екран, мрежа on; втори Power → Yasem
+- LED sys_led: on=синьо (brightness 0), standby=червено (255) на реф. dual-color бокс
+- IR: ensure_ir в start.sh → meson-remote + remotecfg; вход aml_keypad
+- Web config :80 — http://IP/config (мрежа, портал, reboot)
+- Portal Settings през stbWindowMgr (без stbWebWindow на главния портал!)
+- Филтрирани settings: без net_info, video, audio, net, advanced, internal_portal
+- Persist: SaveUserData 2-arg → /storage/yasem/config/userdata/; video_clock.json
+- Reboot device → ExecAction("reboot") → /sbin/reboot
+- TV archive/timeshift: monotonic EXTERNAL_PTS, keyframe start, по-голям prefill
+
+---
+
+## Абсолютни правила
+
+1. Само amcodec (CoreELEC) — без VLC.
+2. Преносим Qt/WebKit bundle (lib/, plugins/, fonts/, qt.conf).
+3. Boot = само Yasem. Kodi masked.
+4. Парола SSH само в env — никога в repo/логове/commit.
+5. Без git commit без изрична молба.
+6. Отговори на български.
+7. HDMI **1080i50hz**. UI 1280×720 @ zoom 1.5 → 1920×1080.
+8. Не връзвай yasem.service с After=remote-config (ordering cycle).
+9. start.sh вика **ensure_ir** (не ensure_i — счупен typo чупи IR след reboot).
+10. Power → soft standby; НЕ quit към Kodi.
+11. yasem.service БЕЗ ExecStartPost stop на yasem-standby (wake deadlock).
+12. standby-watch: без блокиращ dd без timeout.
+13. На главния портал НЕ дефинирай window.stbWebWindow (чупи UI → черен екран).
+14. SaveUserData: 2 аргумента (name, data); не записвай filename-only.
+15. Archive: EXTERNAL_PTS с monotonic pts (не raw .ts PTS); старт от keyframe.
+
+---
+
+## Структура на пакета (yasem/ в yasem.tar)
+
+```
+yasem                 # ELF 32-bit ARM HF
+qt.conf
+lib/ plugins/ fonts/
+start.sh              # 1080i50, ensure_ir, wait_for_network, LED, exec yasem
+standby-watch.sh
+led-status.sh
+install.sh
+install-from-url.sh   # wget/curl + install
+enable-yasem-boot.sh
+cleanup-kodi-addons.sh
+set-1080i50.sh
+yasem.service / .timer / yasem-standby.service
+config/config.json.example
+config/remote.conf
+PROMPT.txt INSTALL.txt README.txt
+```
+
+Цел на бокса: `/storage/yasem/`.
+
+---
+
+## Инсталация на нова кутия
+
+### От интернет
+```
+wget -O /tmp/yasem.tar http://www.example.com/mag/yasem.tar
+tar xf /tmp/yasem.tar -C /tmp
+sh /tmp/yasem/install.sh
+reboot
+```
+
+### Опаковане + качване (PC/WSL)
+```
+export YASEM_SSH_PASS='...'
+export WSLENV=YASEM_SSH_PASS/u
+bash /path/to/yasem-project/build/pack-portable.sh
+# Качи /path/to/yasem-project/yasem.tar → www.example.com/mag/yasem.tar
+```
+
+Подробно: INSTALL.txt
+
+---
+
+## Архитектура на кода
+
+| Файл | Роля |
+|------|------|
+| main.cpp | QApp, linuxfb, status lock 10s, ConfigServer :80, portal retry |
+| browser.cpp | MagView; keys→emulate_key; Power→standby; stbWindowMgr; settings fullscreen/filter; clock persist inject |
+| magapi.cpp | gSTB API; StandBy; Load/SaveUserData; GetEnv; ExecAction(reboot); web return URL |
+| configserver.cpp | HTTP :80 MAG status + /config (connman DHCP/static, portal, reboot) |
+| player.cpp | amcodec + FFmpeg + ALSA + video10; archive monotonic PTS + keyframe |
+| remote_keymap.cpp | remote.conf; linux = nativeScanCode−8 |
+
+### Soft standby
+Power → StandBy(1) + start yasem-standby → blank, stop yasem, wait IR Power → start yasem + power-guard.
+
+### Preview hole
+Прозрачна дупка в OSD за малък viewport (<~1400×900).
+
+### Видео
+Interlaced SD: VFM decoder→ppmgr→amlvideo→deinterlace→amvideo, pace ~20ms, EXTERNAL_PTS.
+Archive: същото + monotonic checkin + skip until keyframe + prefill 24 + 2MB queue.
+НЕ: freerun без PTS на archive (ready_frame_delayed ~900s); pace 40ms на DI (slow-mo).
+
+### Settings (портал)
+Settings.js отваря external/settings през stbWindowMgr.openWebFavorites.
+Exit/Menu → pressKey в iframe#cont (не само parent).
+Скрити модули: net_info, video, audio, net, advanced, internal_portal.
+
+### IR
+Qt nativeScanCode = linux+8. MAG: EXIT 27, MENU 122, CLOCK Alt+Space→2032, INFO→2089.
+ensure_ir: rmmod meson_ir; modprobe meson-remote; remotecfg /storage/.config/remote.conf.
+
+---
+
+## Компилация от нула
+
+### Host
+Windows + WSL2 Ubuntu; arm-linux-gnueabihf-g++; YASEM_SSH_PASS + WSLENV.
+
+### Пълен build
+```
+bash /path/to/yasem-project/build/build-yasem.sh
+```
+Qt 5.15.2 + QtWebKit 5.212.0-alpha4 + ffmpeg 4.3.2 + ce-libs от бокса.
+
+### Инкрементален deploy
+```
+bash /path/to/yasem-project/build/deploy-binary.sh
+```
+stop yasem → scp binary → start. Binary busy ако процесът работи.
+
+### qmake (ръчно)
+```
+export AMCODEC=/path/to/yasem-project/build/amcodec/amcodec
+export FFMPEG=/home/builder/yasem-build/src/ffmpeg-4.3.2
+export ALSA=/home/builder/yasem-build/src/alsa-lib-1.2.4
+export OPENSSL=/home/builder/yasem-build/src/openssl-1.1.1w
+export CELIBS=/home/builder/yasem-build/ce-libs
+cd /home/builder/yasem-build/yasem-obj
+/home/builder/yasem-build/qt/bin/qmake /path/to/yasem-project/yasem/yasem.pro
+make -j4
+```
+Флагове: `-march=armv7-a -mfpu=neon -mfloat-abi=hard`, `-Wl,--allow-shlib-undefined`
+
+---
+
+## Известно работещо състояние (2026-10-08)
+
+- Live H.264 interlaced + HEVC progressive — OK
+- Preview hole + fullscreen — OK
+- IR след reboot (ensure_ir) — OK
+- Soft standby Power off/on + LED — OK
+- Web /config — OK
+- Portal Settings (fullscreen) + филтър подменюта + Exit — OK
+- Reboot device — OK
+- video_clock persist — OK
+- TV archive от справочника — OK (monotonic PTS)
+- SaveUserData 2-arg — OK
+
+---
+
+## Какво НЕ да правиш
+
+- VLC; freerun 0/2+omx freeze; DI върху progressive HEVC
+- After=remote-config; ExecStartPost stop standby
+- stbWebWindow на main portal; 1-arg SaveUserData с filename
+- ensure_i вместо ensure_ir
+- Archive без EXTERNAL_PTS или с raw broadcast PTS
+- Commit на пароли; scp върху работещ binary
+
+---
+
+## Нов чат — стартирай така
+
+1. Прочети този PROMPT.txt + INSTALL.txt
+2. Код: /path/to/yasem-project/yasem\src\
+3. Runtime: /path/to/yasem-project/yasem-portable\ и /path/to/yasem-project/yasem.tar
+4. Бекъп: /path/to/yasem-project/backup/yasem-YYYY-MM-DD\
+5. Deploy: deploy-binary.sh ; Pack: pack-portable.sh ; Upload: yasem.tar → example.com/mag/
+6. Диагностика:
+```
+cat /sys/class/display/mode
+systemctl is-active yasem.service
+tail -n 80 /storage/yasem/yasem.log
+grep -A2 aml_keypad /proc/bus/input/devices
+tail -n 40 /storage/yasem/standby.log
+```
+
+Копирай в чата:
+„Продължи Yasem CoreELEC MAG (виж PROMPT.txt). SSH YOUR_BOX_IP root, парола само YASEM_SSH_PASS. amcodec-only, Yasem-only boot. Български. Без commit.“

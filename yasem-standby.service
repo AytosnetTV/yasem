@@ -1,0 +1,19 @@
+[Unit]
+Description=Yasem soft standby (screen off, wait for Power)
+After=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+Environment=HOME=/storage
+WorkingDirectory=/storage/yasem
+ExecStartPre=-/bin/sh -c 'for b in /sys/class/vtconsole/vtcon*/bind; do [ -e "$b" ] && echo 0 > "$b"; done; echo 1 > /sys/class/graphics/fb0/blank; echo 1 > /sys/devices/virtual/amhdmitx/amhdmitx0/avmute; true'
+ExecStartPre=-/bin/sh -c 'systemctl stop yasem.timer yasem.service 2>/dev/null; killall yasem 2>/dev/null; true'
+ExecStart=/storage/yasem/standby-watch.sh
+# oneshot: do not kill leftover wake helpers aggressively
+KillMode=process
+TimeoutStartSec=infinity
+TimeoutStopSec=3
+
+[Install]
+WantedBy=multi-user.target

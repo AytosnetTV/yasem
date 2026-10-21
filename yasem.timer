@@ -1,0 +1,11 @@
+[Unit]
+Description=Ensure Yasem starts after boot (splash failsafe)
+
+[Timer]
+OnBootSec=5
+AccuracySec=1s
+Unit=yasem.service
+Persistent=false
+
+[Install]
+WantedBy=timers.target

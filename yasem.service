@@ -1,0 +1,21 @@
+[Unit]
+Description=Yasem MAG IPTV (CoreELEC)
+After=local-fs.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/storage
+WorkingDirectory=/storage/yasem
+ExecStartPre=-/bin/sh -c 'rm -f /storage/yasem/.standby /storage/yasem/.wake; for b in /sys/class/vtconsole/vtcon*/bind; do [ -e "$b" ] && echo 0 > "$b"; done; true'
+ExecStartPre=-/storage/.config/yasem-1080i50.sh
+ExecStart=/storage/yasem/start.sh
+# Do NOT stop yasem-standby here — standby-watch calls systemctl start yasem
+# and would deadlock (ExecStartPost stop waits for watch, watch waits for start).
+Restart=always
+RestartSec=2
+TimeoutStopSec=8
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

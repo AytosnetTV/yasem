@@ -1,0 +1,189 @@
+================================================================================
+  YASEM — упътване за инсталиране и пренасяне на друг CoreELEC бокс
+================================================================================
+
+Пакет: yasem.tar  (или папка yasem-portable)
+Качване: https://www.example.com/mag/yasem.tar
+Дата на този пакет: 2026-10-08
+
+--------------------------------------------------------------------------------
+1. ИЗИСКВАНИЯ КЪМ ЦЕЛЕВИЯ БОКС
+--------------------------------------------------------------------------------
+
+  • CoreELEC 19.x (Matrix), 32-bit ARM HF (armv7 hard-float)
+  • Amlogic SoC с работещ amcodec / /dev/video10
+    (тествано: S905L; очаквано: S905 и близки CE 19.3 образи)
+  • root достъп по SSH
+  • Мрежа с DHCP (Ethernet или Wi‑Fi)
+  • Достъп до IPTV портала (по подразбиране http://portal.example.com)
+  • HDMI дисплей, който приема 1080i50hz
+
+  НЕ е подходящ „както е“ за aarch64 / non-Amlogic без прекомпилация.
+
+--------------------------------------------------------------------------------
+2. КАКВО СЕ ИНСТАЛИРА
+--------------------------------------------------------------------------------
+
+  /storage/yasem/          — binary, Qt runtime, скриптове, config
+  systemd: yasem.service, yasem.timer, yasem-standby.service
+  1080i50 + autostart; kodi.service masked
+  aytos/Kodi custom addons се чистят (YASEM_SKIP_CLEANUP=1 за да се запазят)
+
+  Функции:
+  • MAG портал (QtWebKit) + amcodec видео + ALSA звук
+  • Soft standby (Power), LED sys_led, IR meson-remote
+  • Web config на :80 — http://IP/config (мрежа, портал, reboot)
+  • Portal Settings (stbWindowMgr) + филтрирани подменюта
+  • Persist: video_clock, userdata; Reboot device; TV archive playback
+  • Yasem-only boot
+
+--------------------------------------------------------------------------------
+3. ИНСТАЛАЦИЯ ОТ ИНТЕРНЕТ (препоръчително)
+--------------------------------------------------------------------------------
+
+  Предварително качи файла на сайта:
+
+    Локално след pack:  /path/to/yasem-project/yasem.tar
+    Качи като:          http://www.example.com/mag/yasem.tar
+
+  На НОВАТА кутия (SSH root):
+
+    wget -O /tmp/yasem.tar http://www.example.com/mag/yasem.tar
+    tar xf /tmp/yasem.tar -C /tmp
+    sh /tmp/yasem/install.sh
+    reboot
+
+  С curl (ако няма wget):
+
+    curl -fL -o /tmp/yasem.tar http://www.example.com/mag/yasem.tar
+    tar xf /tmp/yasem.tar -C /tmp && sh /tmp/yasem/install.sh && reboot
+
+  Без cleanup на Kodi addons:
+
+    YASEM_SKIP_CLEANUP=1 sh /tmp/yasem/install.sh
+
+  Обновяване на вече инсталирана кутия (ако има install-from-url.sh):
+
+    sh /storage/yasem/install-from-url.sh http://www.example.com/mag/yasem.tar
+    reboot
+
+--------------------------------------------------------------------------------
+4. ИНСТАЛАЦИЯ ОТ PC (scp)
+--------------------------------------------------------------------------------
+
+    scp -r /path/to/yasem-project/yasem-portable root@BOX_IP:/tmp/yasem
+    ssh root@BOX_IP 'sh /tmp/yasem/install.sh && reboot'
+
+  Или само tarball:
+
+    scp /path/to/yasem-project/yasem.tar root@BOX_IP:/tmp/
+    ssh root@BOX_IP 'tar xf /tmp/yasem.tar -C /tmp && sh /tmp/yasem/install.sh && reboot'
+
+--------------------------------------------------------------------------------
+5. ИНСТАЛАЦИЯ ОТ USB
+--------------------------------------------------------------------------------
+
+  1) Копирай yasem.tar или папката yasem-portable на USB.
+  2) На бокса: ls /var/media
+  3) tar xf /var/media/.../yasem.tar -C /tmp && sh /tmp/yasem/install.sh
+  4) reboot
+
+--------------------------------------------------------------------------------
+6. КОНФИГУРАЦИЯ СЛЕД ИНСТАЛ
+--------------------------------------------------------------------------------
+
+  A) Web UI (най-лесно)
+       http://IP-НА-КУТИЯТА/config
+       — DHCP/static, DNS, портал URL, reboot
+
+  B) config.json — /storage/yasem/config/config.json
+       {
+         "portal": "http://portal.example.com",
+         "model": "MAG254",
+         "timezone": "Europe/Sofia",
+         "language": "bg"
+       }
+       mac/serial опционални (иначе от мрежовия интерфейс).
+
+  C) Дистанционно — /storage/yasem/config/remote.conf
+       След промяна: systemctl restart yasem
+
+  D) LED — /storage/yasem/led-status.sh (размени 0/255 ако цветовете са обърнати)
+
+--------------------------------------------------------------------------------
+7. ПРОВЕРКА
+--------------------------------------------------------------------------------
+
+    cat /sys/class/display/mode          # 1080i50hz
+    systemctl is-active yasem.service    # active
+    grep -E 'network ready|load http|aml_keypad' /storage/yasem/yasem.log
+    cat /proc/bus/input/devices | grep -A2 aml_keypad
+    getent hosts portal.example.com
+
+  На ТВ: портал, preview, fullscreen, IR, Power standby, Settings, archive.
+
+--------------------------------------------------------------------------------
+8. ЧЕСТИ ПРОБЛЕМИ
+--------------------------------------------------------------------------------
+
+  • Дистанционното мълчи след reboot
+      → start.sh трябва да вика ensure_ir (не ensure_i)
+        modprobe meson-remote; remotecfg /storage/.config/remote.conf
+        трябва да има aml_keypad в /proc/bus/input/devices
+
+  • Power off без wake
+      → няма ExecStartPost stop на yasem-standby; виж standby.log
+
+  • Host not found при boot
+      → чака DHCP/DNS; провери кабел/DNS
+
+  • Splash hang
+      → systemctl start yasem; не връзвай After=remote-config
+
+  • Text file busy
+      → systemctl stop yasem преди копиране на binary
+
+  • Archive насича / slow-mo
+      → нужен е build с monotonic EXTERNAL_PTS + keyframe start (този пакет)
+
+--------------------------------------------------------------------------------
+9. ДЕИНСТАЛАЦИЯ / ВРЪЩАНЕ НА KODI
+--------------------------------------------------------------------------------
+
+    systemctl stop yasem.timer yasem.service yasem-standby.service
+    systemctl disable yasem.timer yasem.service
+    rm -f /storage/.config/system.d/multi-user.target.wants/yasem.service
+    rm -f /storage/.config/system.d/timers.target.wants/yasem.timer
+    rm -f /storage/.config/system.d/yasem-standby.service
+    systemctl unmask kodi.service
+    systemctl enable kodi.service
+    systemctl start kodi.service
+
+--------------------------------------------------------------------------------
+10. ОПАКОВАНЕ / БЕКЪП / КАЧВАНЕ (на PC)
+--------------------------------------------------------------------------------
+
+  В WSL (с работеща референтна кутия YOUR_BOX_IP):
+
+    export YASEM_SSH_PASS='...'
+    export WSLENV=YASEM_SSH_PASS/u
+    bash /path/to/yasem-project/build/pack-portable.sh
+
+  Резултат:
+    /path/to/yasem-project/yasem-portable\     — папка за scp
+    /path/to/yasem-project/yasem.tar           — ЗА КАЧВАНЕ на сайта
+    /path/to/yasem-project/backup/yasem-YYYY-MM-DD-HHMM\  — бекъп + source
+    /path/to/yasem-project/backup/yasem-YYYY-MM-DD-HHMM.tar.gz
+
+  Качи yasem.tar → www.example.com/mag/yasem.tar (overwrite).
+
+--------------------------------------------------------------------------------
+11. СВЪРЗАНИ ФАЙЛОВЕ
+--------------------------------------------------------------------------------
+
+  install.sh            — инсталация от локална папка
+  install-from-url.sh   — download + install
+  PROMPT.txt            — пълен промпт за компилация/възстановяване
+  README.txt            — кратко
+
+================================================================================
